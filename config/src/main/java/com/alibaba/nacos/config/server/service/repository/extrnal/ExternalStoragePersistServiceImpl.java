@@ -42,37 +42,35 @@ import com.alibaba.nacos.config.server.service.datasource.DataSourceService;
 import com.alibaba.nacos.config.server.service.datasource.DynamicDataSource;
 import com.alibaba.nacos.config.server.service.repository.PaginationHelper;
 import com.alibaba.nacos.config.server.service.repository.PersistService;
+import com.alibaba.nacos.config.server.service.repository.extrnal.repositorys.ConfigInfoAggrRepository;
+import com.alibaba.nacos.config.server.service.repository.extrnal.repositorys.ConfigInfoBetaRepository;
+import com.alibaba.nacos.config.server.service.repository.extrnal.repositorys.ConfigInfoRepository;
+import com.alibaba.nacos.config.server.service.repository.extrnal.repositorys.ConfigInfoTagRepository;
+import com.alibaba.nacos.config.server.service.repository.extrnal.repositorys.ConfigTagsRelationRepository;
+import com.alibaba.nacos.config.server.service.repository.extrnal.repositorys.HisConfigInfoRepository;
+import com.alibaba.nacos.config.server.service.repository.extrnal.repositorys.TenantInfoRepository;
+import com.alibaba.nacos.config.server.service.repository.extrnal.dialect.DialectExistTable;
 import com.alibaba.nacos.config.server.utils.LogUtil;
 import com.alibaba.nacos.config.server.utils.ParamUtils;
 import com.google.common.base.Joiner;
-import com.google.common.collect.Lists;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Conditional;
-import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.dao.IncorrectResultSizeDataAccessException;
 import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.PreparedStatementCreator;
-import org.springframework.jdbc.core.PreparedStatementSetter;
-import org.springframework.jdbc.support.GeneratedKeyHolder;
-import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.util.Assert;
 
 import javax.annotation.PostConstruct;
 import java.io.IOException;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.sql.Statement;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -80,21 +78,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_ADVANCE_INFO_ROW_MAPPER;
-import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_ALL_INFO_ROW_MAPPER;
-import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_INFO4BETA_ROW_MAPPER;
-import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_INFO4TAG_ROW_MAPPER;
 import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_INFO_AGGR_ROW_MAPPER;
 import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_INFO_BASE_ROW_MAPPER;
-import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_INFO_BETA_WRAPPER_ROW_MAPPER;
-import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_INFO_CHANGED_ROW_MAPPER;
 import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_INFO_ROW_MAPPER;
-import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_INFO_TAG_WRAPPER_ROW_MAPPER;
 import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_INFO_WRAPPER_ROW_MAPPER;
 import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.CONFIG_KEY_ROW_MAPPER;
-import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.HISTORY_DETAIL_ROW_MAPPER;
-import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.HISTORY_LIST_ROW_MAPPER;
-import static com.alibaba.nacos.config.server.service.repository.RowMapperManager.TENANT_INFO_ROW_MAPPER;
 
 /**
  * External Storage Persist Service.
@@ -107,15 +95,31 @@ import static com.alibaba.nacos.config.server.service.repository.RowMapperManage
 @Component
 public class ExternalStoragePersistServiceImpl implements PersistService {
     
+    @Autowired
+    private ConfigInfoAggrRepository configInfoAggrRepository;
+    
+    @Autowired
+    private ConfigInfoBetaRepository configInfoBetaRepository;
+    
+    @Autowired
+    private ConfigInfoRepository configInfoRepository;
+    
+    @Autowired
+    private ConfigInfoTagRepository configInfoTagRepository;
+    
+    @Autowired
+    private ConfigTagsRelationRepository configTagsRelationRepository;
+    
+    @Autowired
+    private HisConfigInfoRepository hisConfigInfoRepository;
+    
+    @Autowired
+    private TenantInfoRepository tenantInfoRepository;
+    
+    @Autowired
+    private DialectExistTable dialectExistTable;
+    
     private DataSourceService dataSourceService;
-    
-    private static final String SQL_FIND_ALL_CONFIG_INFO = "select id,data_id,group_id,tenant_id,app_name,content,type,md5,gmt_create,gmt_modified,src_user,src_ip,c_desc,c_use,effect,c_schema from config_info";
-    
-    private static final String SQL_TENANT_INFO_COUNT_BY_TENANT_ID = "select count(1) from tenant_info where tenant_id = ?";
-    
-    private static final String SQL_FIND_CONFIG_INFO_BY_IDS = "SELECT ID,data_id,group_id,tenant_id,app_name,content,md5 FROM config_info WHERE ";
-    
-    private static final String SQL_DELETE_CONFIG_INFO_BY_IDS = "DELETE FROM config_info WHERE ";
     
     private static final String PATTERN_STR = "*";
     
@@ -197,37 +201,13 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     @Override
     public void addConfigInfo4Beta(ConfigInfo configInfo, String betaIps, String srcIp, String srcUser, Timestamp time,
             boolean notify) {
-        String appNameTmp = StringUtils.isBlank(configInfo.getAppName()) ? StringUtils.EMPTY : configInfo.getAppName();
-        String tenantTmp = StringUtils.isBlank(configInfo.getTenant()) ? StringUtils.EMPTY : configInfo.getTenant();
-        String md5 = MD5Utils.md5Hex(configInfo.getContent(), Constants.ENCODE);
-        try {
-            jt.update("INSERT INTO config_info_beta(data_id,group_id,tenant_id,app_name,content,md5,beta_ips,src_ip,"
-                            + "src_user,gmt_create,gmt_modified) VALUES(?,?,?,?,?,?,?,?,?,?,?)", configInfo.getDataId(),
-                    configInfo.getGroup(), tenantTmp, appNameTmp, configInfo.getContent(), md5, betaIps, srcIp, srcUser,
-                    time, time);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoBetaRepository.addConfigInfo4Beta(configInfo, betaIps, srcIp, srcUser, time, notify);
     }
     
     @Override
     public void addConfigInfo4Tag(ConfigInfo configInfo, String tag, String srcIp, String srcUser, Timestamp time,
             boolean notify) {
-        String appNameTmp = StringUtils.isBlank(configInfo.getAppName()) ? StringUtils.EMPTY : configInfo.getAppName();
-        String tenantTmp = StringUtils.isBlank(configInfo.getTenant()) ? StringUtils.EMPTY : configInfo.getTenant();
-        String tagTmp = StringUtils.isBlank(tag) ? StringUtils.EMPTY : tag.trim();
-        String md5 = MD5Utils.md5Hex(configInfo.getContent(), Constants.ENCODE);
-        try {
-            jt.update(
-                    "INSERT INTO config_info_tag(data_id,group_id,tenant_id,tag_id,app_name,content,md5,src_ip,src_user,"
-                            + "gmt_create,gmt_modified) VALUES(?,?,?,?,?,?,?,?,?,?,?)", configInfo.getDataId(),
-                    configInfo.getGroup(), tenantTmp, tagTmp, appNameTmp, configInfo.getContent(), md5, srcIp, srcUser,
-                    time, time);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoTagRepository.addConfigInfo4Tag(configInfo, tag, srcIp, srcUser, time, notify);
     }
     
     @Override
@@ -265,36 +245,13 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     @Override
     public void updateConfigInfo4Beta(ConfigInfo configInfo, String betaIps, String srcIp, String srcUser,
             Timestamp time, boolean notify) {
-        String appNameTmp = StringUtils.isBlank(configInfo.getAppName()) ? StringUtils.EMPTY : configInfo.getAppName();
-        String tenantTmp = StringUtils.isBlank(configInfo.getTenant()) ? StringUtils.EMPTY : configInfo.getTenant();
-        String md5 = MD5Utils.md5Hex(configInfo.getContent(), Constants.ENCODE);
-        try {
-            jt.update(
-                    "UPDATE config_info_beta SET content=?, md5 = ?, src_ip=?,src_user=?,gmt_modified=?,app_name=? WHERE "
-                            + "data_id=? AND group_id=? AND tenant_id=?", configInfo.getContent(), md5, srcIp, srcUser,
-                    time, appNameTmp, configInfo.getDataId(), configInfo.getGroup(), tenantTmp);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoBetaRepository.updateConfigInfo4Beta(configInfo, betaIps, srcIp, srcUser, time, notify);
     }
     
     @Override
     public void updateConfigInfo4Tag(ConfigInfo configInfo, String tag, String srcIp, String srcUser, Timestamp time,
             boolean notify) {
-        String appNameTmp = StringUtils.isBlank(configInfo.getAppName()) ? StringUtils.EMPTY : configInfo.getAppName();
-        String tenantTmp = StringUtils.isBlank(configInfo.getTenant()) ? StringUtils.EMPTY : configInfo.getTenant();
-        String tagTmp = StringUtils.isBlank(tag) ? StringUtils.EMPTY : tag.trim();
-        try {
-            String md5 = MD5Utils.md5Hex(configInfo.getContent(), Constants.ENCODE);
-            jt.update(
-                    "UPDATE config_info_tag SET content=?, md5 = ?, src_ip=?,src_user=?,gmt_modified=?,app_name=? WHERE "
-                            + "data_id=? AND group_id=? AND tenant_id=? AND tag_id=?", configInfo.getContent(), md5,
-                    srcIp, srcUser, time, appNameTmp, configInfo.getDataId(), configInfo.getGroup(), tenantTmp, tagTmp);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoTagRepository.updateConfigInfo4Tag(configInfo, tag, srcIp, srcUser, time, notify);
     }
     
     @Override
@@ -319,15 +276,7 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public void updateMd5(String dataId, String group, String tenant, String md5, Timestamp lastTime) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        try {
-            jt.update(
-                    "UPDATE config_info SET md5 = ? WHERE data_id=? AND group_id=? AND tenant_id=? AND gmt_modified=?",
-                    md5, dataId, group, tenantTmp, lastTime);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoRepository.updateMd5(dataId, group, tenant, md5, lastTime);
     }
     
     @Override
@@ -412,20 +361,7 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public void removeConfigInfo4Beta(final String dataId, final String group, final String tenant) {
-        final String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        tjt.execute(status -> {
-            try {
-                ConfigInfo configInfo = findConfigInfo4Beta(dataId, group, tenant);
-                if (configInfo != null) {
-                    jt.update("DELETE FROM config_info_beta WHERE data_id=? AND group_id=? AND tenant_id=?", dataId,
-                            group, tenantTmp);
-                }
-            } catch (CannotGetJdbcConnectionException e) {
-                LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-                throw e;
-            }
-            return Boolean.TRUE;
-        });
+        configInfoBetaRepository.removeConfigInfo4Beta(dataId, group, tenant);
     }
     
     // ----------------------- config_aggr_info table insert update delete
@@ -433,127 +369,39 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     @Override
     public boolean addAggrConfigInfo(final String dataId, final String group, String tenant, final String datumId,
             String appName, final String content) {
-        String appNameTmp = StringUtils.isBlank(appName) ? StringUtils.EMPTY : appName;
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        final Timestamp now = new Timestamp(System.currentTimeMillis());
-        String select = "SELECT content FROM config_info_aggr WHERE data_id = ? AND group_id = ? AND tenant_id = ?  AND datum_id = ?";
-        String insert = "INSERT INTO config_info_aggr(data_id, group_id, tenant_id, datum_id, app_name, content, gmt_modified) VALUES(?,?,?,?,?,?,?) ";
-        String update = "UPDATE config_info_aggr SET content = ? , gmt_modified = ? WHERE data_id = ? AND group_id = ? AND tenant_id = ? AND datum_id = ?";
-        
-        try {
-            try {
-                String dbContent = jt
-                        .queryForObject(select, new Object[] {dataId, group, tenantTmp, datumId}, String.class);
-                
-                if (dbContent != null && dbContent.equals(content)) {
-                    return true;
-                } else {
-                    return jt.update(update, content, now, dataId, group, tenantTmp, datumId) > 0;
-                }
-            } catch (EmptyResultDataAccessException ex) { // no data, insert
-                return jt.update(insert, dataId, group, tenantTmp, datumId, appNameTmp, content, now) > 0;
-            }
-        } catch (DataAccessException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoAggrRepository.addAggrConfigInfo(dataId, group, tenant, datumId, appName, content);
     }
     
     @Override
     public void removeSingleAggrConfigInfo(final String dataId, final String group, final String tenant,
             final String datumId) {
-        final String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        String sql = "DELETE FROM config_info_aggr WHERE data_id=? AND group_id=? AND tenant_id=? AND datum_id=?";
-        
-        try {
-            this.jt.update(sql, new PreparedStatementSetter() {
-                @Override
-                public void setValues(PreparedStatement ps) throws SQLException {
-                    int index = 1;
-                    ps.setString(index++, dataId);
-                    ps.setString(index++, group);
-                    ps.setString(index++, tenantTmp);
-                    ps.setString(index, datumId);
-                }
-            });
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoAggrRepository.removeSingleAggrConfigInfo(dataId, group, tenant, datumId);
     }
     
     @Override
     public void removeAggrConfigInfo(final String dataId, final String group, final String tenant) {
-        final String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        String sql = "DELETE FROM config_info_aggr WHERE data_id=? AND group_id=? AND tenant_id=?";
-        
-        try {
-            this.jt.update(sql, new PreparedStatementSetter() {
-                @Override
-                public void setValues(PreparedStatement ps) throws SQLException {
-                    int index = 1;
-                    ps.setString(index++, dataId);
-                    ps.setString(index++, group);
-                    ps.setString(index, tenantTmp);
-                }
-            });
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoAggrRepository.removeAggrConfigInfo(dataId, group, tenant);
     }
     
     @Override
     public boolean batchRemoveAggr(final String dataId, final String group, final String tenant,
             final List<String> datumList) {
-        final String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        final StringBuilder datumString = new StringBuilder();
-        for (String datum : datumList) {
-            datumString.append("'").append(datum).append("',");
-        }
-        datumString.deleteCharAt(datumString.length() - 1);
-        final String sql =
-                "delete from config_info_aggr where data_id=? and group_id=? and tenant_id=? and datum_id in ("
-                        + datumString.toString() + ")";
-        try {
-            jt.update(sql, dataId, group, tenantTmp);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            return false;
-        }
-        return true;
+        return configInfoAggrRepository.batchRemoveAggr(dataId, group, tenant, datumList);
     }
     
     @Override
     public void removeConfigHistory(final Timestamp startTime, final int limitSize) {
-        String sql = "delete from his_config_info where gmt_modified < ? limit ?";
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        try {
-            helper.updateLimit(sql, new Object[] {startTime, limitSize});
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        hisConfigInfoRepository.removeConfigHistory(startTime, limitSize);
     }
     
     @Override
     public int findConfigHistoryCountByTime(final Timestamp startTime) {
-        String sql = "SELECT COUNT(*) FROM his_config_info WHERE gmt_modified < ?";
-        Integer result = jt.queryForObject(sql, Integer.class, new Object[] {startTime});
-        if (result == null) {
-            throw new IllegalArgumentException("configInfoBetaCount error");
-        }
-        return result.intValue();
+        return hisConfigInfoRepository.findConfigHistoryCountByTime(startTime);
     }
     
     @Override
     public long findConfigMaxId() {
-        String sql = "SELECT max(id) FROM config_info";
-        try {
-            return jt.queryForObject(sql, Long.class);
-        } catch (NullPointerException e) {
-            return 0;
-        }
+        return configInfoRepository.findConfigMaxId();
     }
     
     @Override
@@ -588,34 +436,7 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     @Override
     public boolean replaceAggr(final String dataId, final String group, final String tenant,
             final Map<String, String> datumMap, final String appName) {
-        try {
-            Boolean isReplaceOk = tjt.execute(new TransactionCallback<Boolean>() {
-                @Override
-                public Boolean doInTransaction(TransactionStatus status) {
-                    try {
-                        String appNameTmp = appName == null ? "" : appName;
-                        removeAggrConfigInfo(dataId, group, tenant);
-                        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-                        String sql = "INSERT INTO config_info_aggr(data_id, group_id, tenant_id, datum_id, app_name, content, gmt_modified) VALUES(?,?,?,?,?,?,?) ";
-                        for (Map.Entry<String, String> datumEntry : datumMap.entrySet()) {
-                            jt.update(sql, dataId, group, tenantTmp, datumEntry.getKey(), appNameTmp,
-                                    datumEntry.getValue(), new Timestamp(System.currentTimeMillis()));
-                        }
-                    } catch (Throwable e) {
-                        throw new TransactionSystemException("error in addAggrConfigInfo");
-                    }
-                    return Boolean.TRUE;
-                }
-            });
-            if (isReplaceOk == null) {
-                return false;
-            }
-            return isReplaceOk;
-        } catch (TransactionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            return false;
-        }
-        
+        return configInfoAggrRepository.replaceAggr(dataId, group, tenant, datumMap, appName);
     }
     
     @Deprecated
@@ -638,579 +459,146 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public ConfigInfo4Beta findConfigInfo4Beta(final String dataId, final String group, final String tenant) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        try {
-            return this.jt.queryForObject(
-                    "SELECT ID,data_id,group_id,tenant_id,app_name,content,beta_ips FROM config_info_beta WHERE data_id=? AND group_id=? AND tenant_id=?",
-                    new Object[] {dataId, group, tenantTmp}, CONFIG_INFO4BETA_ROW_MAPPER);
-        } catch (EmptyResultDataAccessException e) { // Indicates that the data does not exist, returns null.
-            return null;
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoBetaRepository.findConfigInfo4Beta(dataId, group, tenant);
     }
     
     @Override
     public ConfigInfo4Tag findConfigInfo4Tag(final String dataId, final String group, final String tenant,
             final String tag) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        String tagTmp = StringUtils.isBlank(tag) ? StringUtils.EMPTY : tag.trim();
-        try {
-            return this.jt.queryForObject(
-                    "SELECT ID,data_id,group_id,tenant_id,tag_id,app_name,content FROM config_info_tag WHERE data_id=? AND group_id=? AND tenant_id=? AND tag_id=?",
-                    new Object[] {dataId, group, tenantTmp, tagTmp}, CONFIG_INFO4TAG_ROW_MAPPER);
-        } catch (EmptyResultDataAccessException e) { // Indicates that the data does not exist, returns null.
-            return null;
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoTagRepository.findConfigInfo4Tag(dataId, group, tenant, tag);
     }
     
     @Override
     public ConfigInfo findConfigInfoApp(final String dataId, final String group, final String tenant,
             final String appName) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        try {
-            return this.jt.queryForObject(
-                    "SELECT ID,data_id,group_id,tenant_id,app_name,content FROM config_info WHERE data_id=? AND group_id=? AND tenant_id=? AND app_name=?",
-                    new Object[] {dataId, group, tenantTmp, appName}, CONFIG_INFO_ROW_MAPPER);
-        } catch (EmptyResultDataAccessException e) { // Indicates that the data does not exist, returns null.
-            return null;
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoApp(dataId, group, tenant, appName);
     }
     
     @Override
     public ConfigInfo findConfigInfoAdvanceInfo(final String dataId, final String group, final String tenant,
             final Map<String, Object> configAdvanceInfo) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        final String appName = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("appName");
-        final String configTags = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("config_tags");
-        List<String> paramList = new ArrayList<String>();
-        paramList.add(dataId);
-        paramList.add(group);
-        paramList.add(tenantTmp);
-        
-        StringBuilder sql = new StringBuilder(
-                "select ID,data_id,group_id,tenant_id,app_name,content from config_info where data_id=? and group_id=? and tenant_id=? ");
-        if (StringUtils.isNotBlank(configTags)) {
-            sql = new StringBuilder(
-                    "select a.ID,a.data_id,a.group_id,a.tenant_id,a.app_name,a.content from config_info  a left join "
-                            + "config_tags_relation b on a.id=b.id where a.data_id=? and a.group_id=? and a.tenant_id=? ");
-            sql.append(" and b.tag_name in (");
-            String[] tagArr = configTags.split(",");
-            for (int i = 0; i < tagArr.length; i++) {
-                if (i != 0) {
-                    sql.append(", ");
-                }
-                sql.append("?");
-                paramList.add(tagArr[i]);
-            }
-            sql.append(") ");
-            
-            if (StringUtils.isNotBlank(appName)) {
-                sql.append(" and a.app_name=? ");
-                paramList.add(appName);
-            }
-        } else {
-            if (StringUtils.isNotBlank(appName)) {
-                sql.append(" and app_name=? ");
-                paramList.add(appName);
-            }
-        }
-        
-        try {
-            return this.jt.queryForObject(sql.toString(), paramList.toArray(), CONFIG_INFO_ROW_MAPPER);
-        } catch (EmptyResultDataAccessException e) { // Indicates that the data does not exist, returns null.
-            return null;
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
-        
+        return configInfoRepository.findConfigInfoAdvanceInfo(dataId, group, tenant, configAdvanceInfo);
     }
     
     @Override
     public ConfigInfoBase findConfigInfoBase(final String dataId, final String group) {
-        try {
-            return this.jt.queryForObject(
-                    "SELECT ID,data_id,group_id,content FROM config_info WHERE data_id=? AND group_id=? AND tenant_id=?",
-                    new Object[] {dataId, group, StringUtils.EMPTY}, CONFIG_INFO_BASE_ROW_MAPPER);
-        } catch (EmptyResultDataAccessException e) { // Indicates that the data does not exist, returns null.
-            return null;
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoBase(dataId, group);
     }
     
     @Override
     public ConfigInfo findConfigInfo(long id) {
-        try {
-            return this.jt
-                    .queryForObject("SELECT ID,data_id,group_id,tenant_id,app_name,content FROM config_info WHERE ID=?",
-                            new Object[] {id}, CONFIG_INFO_ROW_MAPPER);
-        } catch (EmptyResultDataAccessException e) { // Indicates that the data does not exist, returns null.
-            return null;
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfo(id);
     }
     
     @Override
     public ConfigInfo findConfigInfo(final String dataId, final String group, final String tenant) {
-        final String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        try {
-            return this.jt.queryForObject(
-                    "SELECT ID,data_id,group_id,tenant_id,app_name,content,md5,type FROM config_info WHERE data_id=? AND group_id=? AND tenant_id=?",
-                    new Object[] {dataId, group, tenantTmp}, CONFIG_INFO_ROW_MAPPER);
-        } catch (EmptyResultDataAccessException e) { // Indicates that the data does not exist, returns null.
-            return null;
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfo(dataId, group, tenant);
     }
     
     @Override
     public Page<ConfigInfo> findConfigInfoByDataId(final int pageNo, final int pageSize, final String dataId,
             final String tenant) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        try {
-            return helper.fetchPage("select count(*) from config_info where data_id=? and tenant_id=?",
-                    "select ID,data_id,group_id,tenant_id,app_name,content from config_info where data_id=? and tenant_id=?",
-                    new Object[] {dataId, tenantTmp}, pageNo, pageSize, CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoByDataId(pageNo, pageSize, dataId, tenant);
     }
     
     @Override
     public Page<ConfigInfo> findConfigInfoByDataIdAndApp(final int pageNo, final int pageSize, final String dataId,
             final String tenant, final String appName) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        try {
-            return helper.fetchPage("select count(*) from config_info where data_id=? and tenant_id=? and app_name=?",
-                    "select ID,data_id,group_id,tenant_id,app_name,content from config_info where data_id=? and tenant_id=? and app_name=?",
-                    new Object[] {dataId, tenantTmp, appName}, pageNo, pageSize, CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoByDataIdAndApp(pageNo, pageSize, dataId, tenant, appName);
     }
     
     @Override
     public Page<ConfigInfo> findConfigInfoByDataIdAndAdvance(final int pageNo, final int pageSize, final String dataId,
             final String tenant, final Map<String, Object> configAdvanceInfo) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        final String appName = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("appName");
-        final String configTags = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("config_tags");
-        StringBuilder sqlCount = new StringBuilder("select count(*) from config_info where data_id=? and tenant_id=? ");
-        StringBuilder sql = new StringBuilder(
-                "select ID,data_id,group_id,tenant_id,app_name,content from config_info where data_id=? and tenant_id=? ");
-        List<String> paramList = new ArrayList<String>();
-        paramList.add(dataId);
-        paramList.add(tenantTmp);
-        if (StringUtils.isNotBlank(configTags)) {
-            sqlCount = new StringBuilder(
-                    "select count(*) from config_info  a left join config_tags_relation b on a.id=b.id where a.data_id=? and a.tenant_id=? ");
-            
-            sql = new StringBuilder(
-                    "select a.ID,a.data_id,a.group_id,a.tenant_id,a.app_name,a.content from config_info  a left join "
-                            + "config_tags_relation b on a.id=b.id where a.data_id=? and a.tenant_id=? ");
-            
-            sqlCount.append(" and b.tag_name in (");
-            sql.append(" and b.tag_name in (");
-            String[] tagArr = configTags.split(",");
-            for (int i = 0; i < tagArr.length; i++) {
-                if (i != 0) {
-                    sqlCount.append(", ");
-                    sql.append(", ");
-                }
-                sqlCount.append("?");
-                sql.append("?");
-                paramList.add(tagArr[i]);
-            }
-            sqlCount.append(") ");
-            sql.append(") ");
-            
-            if (StringUtils.isNotBlank(appName)) {
-                sqlCount.append(" and a.app_name=? ");
-                sql.append(" and a.app_name=? ");
-                paramList.add(appName);
-            }
-        } else {
-            if (StringUtils.isNotBlank(appName)) {
-                sqlCount.append(" and app_name=? ");
-                sql.append(" and app_name=? ");
-                paramList.add(appName);
-            }
-        }
-        try {
-            return helper.fetchPage(sqlCount.toString(), sql.toString(), paramList.toArray(), pageNo, pageSize,
-                    CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository
+                .findConfigInfoByDataIdAndAdvance(pageNo, pageSize, dataId, tenant, configAdvanceInfo);
     }
     
     @Override
     public Page<ConfigInfo> findConfigInfo4Page(final int pageNo, final int pageSize, final String dataId,
             final String group, final String tenant, final Map<String, Object> configAdvanceInfo) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        final String appName = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("appName");
-        final String configTags = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("config_tags");
-        String sqlCount = "select count(*) from config_info";
-        String sql = "select ID,data_id,group_id,tenant_id,app_name,content,type from config_info";
-        StringBuilder where = new StringBuilder(" where ");
-        List<String> paramList = new ArrayList<String>();
-        paramList.add(tenantTmp);
-        if (StringUtils.isNotBlank(configTags)) {
-            sqlCount = "select count(*) from config_info  a left join config_tags_relation b on a.id=b.id";
-            sql = "select a.ID,a.data_id,a.group_id,a.tenant_id,a.app_name,a.content from config_info  a left join "
-                    + "config_tags_relation b on a.id=b.id";
-            
-            where.append(" a.tenant_id=? ");
-            
-            if (StringUtils.isNotBlank(dataId)) {
-                where.append(" and a.data_id=? ");
-                paramList.add(dataId);
-            }
-            if (StringUtils.isNotBlank(group)) {
-                where.append(" and a.group_id=? ");
-                paramList.add(group);
-            }
-            if (StringUtils.isNotBlank(appName)) {
-                where.append(" and a.app_name=? ");
-                paramList.add(appName);
-            }
-            
-            where.append(" and b.tag_name in (");
-            String[] tagArr = configTags.split(",");
-            for (int i = 0; i < tagArr.length; i++) {
-                if (i != 0) {
-                    where.append(", ");
-                }
-                where.append("?");
-                paramList.add(tagArr[i]);
-            }
-            where.append(") ");
-        } else {
-            where.append(" tenant_id=? ");
-            if (StringUtils.isNotBlank(dataId)) {
-                where.append(" and data_id=? ");
-                paramList.add(dataId);
-            }
-            if (StringUtils.isNotBlank(group)) {
-                where.append(" and group_id=? ");
-                paramList.add(group);
-            }
-            if (StringUtils.isNotBlank(appName)) {
-                where.append(" and app_name=? ");
-                paramList.add(appName);
-            }
-        }
-        try {
-            return helper.fetchPage(sqlCount + where, sql + where, paramList.toArray(), pageNo, pageSize,
-                    CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfo4Page(pageNo, pageSize, dataId, group, tenant, configAdvanceInfo);
     }
     
     @Override
     public Page<ConfigInfoBase> findConfigInfoBaseByDataId(final int pageNo, final int pageSize, final String dataId) {
-        PaginationHelper<ConfigInfoBase> helper = createPaginationHelper();
-        try {
-            return helper.fetchPage("select count(*) from config_info where data_id=? and tenant_id=?",
-                    "select ID,data_id,group_id,content from config_info where data_id=? and tenant_id=?",
-                    new Object[] {dataId, StringUtils.EMPTY}, pageNo, pageSize, CONFIG_INFO_BASE_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoBaseByDataId(pageNo, pageSize, dataId);
     }
     
     @Override
     public Page<ConfigInfo> findConfigInfoByGroup(final int pageNo, final int pageSize, final String group,
             final String tenant) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        try {
-            return helper.fetchPage("select count(*) from config_info where group_id=? and tenant_id=?",
-                    "select ID,data_id,group_id,tenant_id,app_name,content from config_info where group_id=? and tenant_id=?",
-                    new Object[] {group, tenantTmp}, pageNo, pageSize, CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoByGroup(pageNo, pageSize, group, tenant);
     }
     
     @Override
     public Page<ConfigInfo> findConfigInfoByGroupAndApp(final int pageNo, final int pageSize, final String group,
             final String tenant, final String appName) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        try {
-            return helper.fetchPage("select count(*) from config_info where group_id=? and tenant_id=? and app_name =?",
-                    "select ID,data_id,group_id,tenant_id,app_name,content from config_info where group_id=? and tenant_id=? and app_name =?",
-                    new Object[] {group, tenantTmp, appName}, pageNo, pageSize, CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoByGroupAndApp(pageNo, pageSize, group, tenant, appName);
     }
     
     @Override
     public Page<ConfigInfo> findConfigInfoByGroupAndAdvance(final int pageNo, final int pageSize, final String group,
             final String tenant, final Map<String, Object> configAdvanceInfo) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        
-        final String appName = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("appName");
-        final String configTags = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("config_tags");
-        StringBuilder sqlCount = new StringBuilder(
-                "select count(*) from config_info where group_id=? and tenant_id=? ");
-        StringBuilder sql = new StringBuilder(
-                "select ID,data_id,group_id,tenant_id,app_name,content from config_info where group_id=? and tenant_id=? ");
-        List<String> paramList = new ArrayList<String>();
-        paramList.add(group);
-        paramList.add(tenantTmp);
-        if (StringUtils.isNotBlank(configTags)) {
-            sqlCount = new StringBuilder(
-                    "select count(*) from config_info  a left join config_tags_relation b on a.id=b.id where a.group_id=? and a.tenant_id=? ");
-            sql = new StringBuilder(
-                    "select a.ID,a.data_id,a.group_id,a.tenant_id,a.app_name,a.content from config_info  a left join "
-                            + "config_tags_relation b on a.id=b.id where a.group_id=? and a.tenant_id=? ");
-            
-            sqlCount.append(" and b.tag_name in (");
-            sql.append(" and b.tag_name in (");
-            String[] tagArr = configTags.split(",");
-            for (int i = 0; i < tagArr.length; i++) {
-                if (i != 0) {
-                    sqlCount.append(", ");
-                    sql.append(", ");
-                }
-                sqlCount.append("?");
-                sql.append("?");
-                paramList.add(tagArr[i]);
-            }
-            sqlCount.append(") ");
-            sql.append(") ");
-            
-            if (StringUtils.isNotBlank(appName)) {
-                sqlCount.append(" and a.app_name=? ");
-                sql.append(" and a.app_name=? ");
-                paramList.add(appName);
-            }
-        } else {
-            if (StringUtils.isNotBlank(appName)) {
-                sqlCount.append(" and app_name=? ");
-                sql.append(" and app_name=? ");
-                paramList.add(appName);
-            }
-        }
-        
-        try {
-            return helper.fetchPage(sqlCount.toString(), sql.toString(), paramList.toArray(), pageNo, pageSize,
-                    CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoByGroupAndAdvance(pageNo, pageSize, group, tenant, configAdvanceInfo);
     }
     
     @Override
     public Page<ConfigInfo> findConfigInfoByApp(final int pageNo, final int pageSize, final String tenant,
             final String appName) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        try {
-            return helper.fetchPage("select count(*) from config_info where tenant_id like ? and app_name=?",
-                    "select ID,data_id,group_id,tenant_id,app_name,content from config_info where tenant_id like ? and app_name=?",
-                    new Object[] {generateLikeArgument(tenantTmp), appName}, pageNo, pageSize, CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoByApp(pageNo, pageSize, tenant, appName);
     }
     
     @Override
     public Page<ConfigInfo> findConfigInfoByAdvance(final int pageNo, final int pageSize, final String tenant,
             final Map<String, Object> configAdvanceInfo) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        final String appName = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("appName");
-        final String configTags = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("config_tags");
-        StringBuilder sqlCount = new StringBuilder("select count(*) from config_info where tenant_id like ? ");
-        StringBuilder sql = new StringBuilder(
-                "select ID,data_id,group_id,tenant_id,app_name,content from config_info where tenant_id like ? ");
-        List<String> paramList = new ArrayList<String>();
-        paramList.add(tenantTmp);
-        if (StringUtils.isNotBlank(configTags)) {
-            sqlCount = new StringBuilder(
-                    "select count(*) from config_info a left join config_tags_relation b on a.id=b.id where a.tenant_id=? ");
-            
-            sql = new StringBuilder(
-                    "select a.ID,a.data_id,a.group_id,a.tenant_id,a.app_name,a.content from config_info  a left join "
-                            + "config_tags_relation b on a.id=b.id where a.tenant_id=? ");
-            
-            sqlCount.append(" and b.tag_name in (");
-            sql.append(" and b.tag_name in (");
-            String[] tagArr = configTags.split(",");
-            for (int i = 0; i < tagArr.length; i++) {
-                if (i != 0) {
-                    sqlCount.append(", ");
-                    sql.append(", ");
-                }
-                sqlCount.append("?");
-                sql.append("?");
-                paramList.add(tagArr[i]);
-            }
-            sqlCount.append(") ");
-            sql.append(") ");
-            
-            if (StringUtils.isNotBlank(appName)) {
-                sqlCount.append(" and a.app_name=? ");
-                sql.append(" and a.app_name=? ");
-                paramList.add(appName);
-            }
-        } else {
-            if (StringUtils.isNotBlank(appName)) {
-                sqlCount.append(" and app_name=? ");
-                sql.append(" and app_name=? ");
-                paramList.add(appName);
-            }
-        }
-        
-        try {
-            return helper.fetchPage(sqlCount.toString(), sql.toString(), paramList.toArray(), pageNo, pageSize,
-                    CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoByAdvance(pageNo, pageSize, tenant, configAdvanceInfo);
     }
     
     @Override
     
     public Page<ConfigInfoBase> findConfigInfoBaseByGroup(final int pageNo, final int pageSize, final String group) {
-        PaginationHelper<ConfigInfoBase> helper = createPaginationHelper();
-        try {
-            return helper.fetchPage("select count(*) from config_info where group_id=? and tenant_id=?",
-                    "select ID,data_id,group_id,content from config_info where group_id=? and tenant_id=?",
-                    new Object[] {group, StringUtils.EMPTY}, pageNo, pageSize, CONFIG_INFO_BASE_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoBaseByGroup(pageNo, pageSize, group);
     }
     
     @Override
     public int configInfoCount() {
-        String sql = " SELECT COUNT(ID) FROM config_info ";
-        Integer result = jt.queryForObject(sql, Integer.class);
-        if (result == null) {
-            throw new IllegalArgumentException("configInfoCount error");
-        }
-        return result.intValue();
+        return configInfoRepository.configInfoCount();
     }
     
     @Override
     public int configInfoCount(String tenant) {
-        String sql = " SELECT COUNT(ID) FROM config_info where tenant_id like ?";
-        Integer result = jt.queryForObject(sql, new Object[] {tenant}, Integer.class);
-        if (result == null) {
-            throw new IllegalArgumentException("configInfoCount error");
-        }
-        return result.intValue();
+        return configInfoRepository.configInfoCount(tenant);
     }
     
     @Override
     public int configInfoBetaCount() {
-        String sql = " SELECT COUNT(ID) FROM config_info_beta ";
-        Integer result = jt.queryForObject(sql, Integer.class);
-        if (result == null) {
-            throw new IllegalArgumentException("configInfoBetaCount error");
-        }
-        return result.intValue();
+        return configInfoBetaRepository.configInfoBetaCount();
     }
     
     @Override
     public int configInfoTagCount() {
-        String sql = " SELECT COUNT(ID) FROM config_info_tag ";
-        Integer result = jt.queryForObject(sql, Integer.class);
-        if (result == null) {
-            throw new IllegalArgumentException("configInfoBetaCount error");
-        }
-        return result.intValue();
+        return configInfoTagRepository.configInfoTagCount();
     }
     
     @Override
     public List<String> getTenantIdList(int page, int pageSize) {
-        String sql = "SELECT tenant_id FROM config_info WHERE tenant_id != '' GROUP BY tenant_id LIMIT ?, ?";
-        int from = (page - 1) * pageSize;
-        return jt.queryForList(sql, String.class, from, pageSize);
+        return configInfoRepository.getTenantIdList(page, pageSize);
     }
     
     @Override
     public List<String> getGroupIdList(int page, int pageSize) {
-        String sql = "SELECT group_id FROM config_info WHERE tenant_id ='' GROUP BY group_id LIMIT ?, ?";
-        int from = (page - 1) * pageSize;
-        return jt.queryForList(sql, String.class, from, pageSize);
+        return configInfoRepository.getGroupIdList(page, pageSize);
     }
     
     @Override
     public int aggrConfigInfoCount(String dataId, String group, String tenant) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        String sql = " SELECT COUNT(ID) FROM config_info_aggr WHERE data_id = ? AND group_id = ? AND tenant_id = ?";
-        Integer result = jt.queryForObject(sql, Integer.class, new Object[] {dataId, group, tenantTmp});
-        if (result == null) {
-            throw new IllegalArgumentException("aggrConfigInfoCount error");
-        }
-        return result.intValue();
+        return configInfoAggrRepository.aggrConfigInfoCount(dataId, group, tenant);
     }
     
     @Override
     public int aggrConfigInfoCount(String dataId, String group, String tenant, List<String> datumIds, boolean isIn) {
-        if (datumIds == null || datumIds.isEmpty()) {
-            return 0;
-        }
-        final String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        StringBuilder sql = new StringBuilder(
-                " SELECT COUNT(*) FROM config_info_aggr WHERE data_id = ? and group_id = ? and tenant_id = ? and datum_id");
-        if (isIn) {
-            sql.append(" in (");
-        } else {
-            sql.append(" not in (");
-        }
-        for (int i = 0, size = datumIds.size(); i < size; i++) {
-            if (i > 0) {
-                sql.append(", ");
-            }
-            sql.append("?");
-        }
-        sql.append(")");
-        
-        List<Object> objectList = Lists.<Object>newArrayList(dataId, group, tenantTmp);
-        objectList.addAll(datumIds);
-        Integer result = jt.queryForObject(sql.toString(), Integer.class, objectList.toArray());
-        if (result == null) {
-            throw new IllegalArgumentException("aggrConfigInfoCount error");
-        }
-        return result.intValue();
+        return configInfoAggrRepository.aggrConfigInfoCount(dataId, group, tenant, datumIds, isIn);
     }
     
     @Override
@@ -1225,21 +613,7 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public Page<ConfigInfo> findAllConfigInfo(final int pageNo, final int pageSize, final String tenant) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        String sqlCountRows = "SELECT COUNT(*) FROM config_info";
-        String sqlFetchRows = " SELECT t.id,data_id,group_id,tenant_id,app_name,content,md5 "
-                + " FROM (  SELECT id FROM config_info WHERE tenant_id like ? ORDER BY id LIMIT ?,? )"
-                + " g, config_info t  WHERE g.id = t.id ";
-        
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        try {
-            return helper.fetchPageLimit(sqlCountRows, sqlFetchRows,
-                    new Object[] {generateLikeArgument(tenantTmp), (pageNo - 1) * pageSize, pageSize}, pageNo, pageSize,
-                    CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findAllConfigInfo(pageNo, pageSize, tenant);
     }
     
     @Override
@@ -1302,68 +676,22 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public Page<ConfigInfoWrapper> findAllConfigInfoForDumpAll(final int pageNo, final int pageSize) {
-        String sqlCountRows = "select count(*) from config_info";
-        String sqlFetchRows = " SELECT t.id,type,data_id,group_id,tenant_id,app_name,content,md5,gmt_modified "
-                + " FROM ( SELECT id FROM config_info   ORDER BY id LIMIT ?,?  )"
-                + " g, config_info t WHERE g.id = t.id ";
-        PaginationHelper<ConfigInfoWrapper> helper = createPaginationHelper();
-        
-        List<String> params = new ArrayList<String>();
-        
-        try {
-            return helper.fetchPageLimit(sqlCountRows, sqlFetchRows, params.toArray(), pageNo, pageSize,
-                    CONFIG_INFO_WRAPPER_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findAllConfigInfoForDumpAll(pageNo, pageSize);
     }
     
     @Override
     public Page<ConfigInfoWrapper> findAllConfigInfoFragment(final long lastMaxId, final int pageSize) {
-        String select = "SELECT id,data_id,group_id,tenant_id,app_name,content,md5,gmt_modified,type from config_info where id > ? order by id asc limit ?,?";
-        PaginationHelper<ConfigInfoWrapper> helper = createPaginationHelper();
-        try {
-            return helper.fetchPageLimit(select, new Object[] {lastMaxId, 0, pageSize}, 1, pageSize,
-                    CONFIG_INFO_WRAPPER_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findAllConfigInfoFragment(lastMaxId, pageSize);
     }
     
     @Override
     public Page<ConfigInfoBetaWrapper> findAllConfigInfoBetaForDumpAll(final int pageNo, final int pageSize) {
-        String sqlCountRows = "SELECT COUNT(*) FROM config_info_beta";
-        String sqlFetchRows = " SELECT t.id,data_id,group_id,tenant_id,app_name,content,md5,gmt_modified,beta_ips "
-                + " FROM ( SELECT id FROM config_info_beta  ORDER BY id LIMIT ?,?  )"
-                + "  g, config_info_beta t WHERE g.id = t.id ";
-        PaginationHelper<ConfigInfoBetaWrapper> helper = createPaginationHelper();
-        try {
-            return helper.fetchPageLimit(sqlCountRows, sqlFetchRows, new Object[] {(pageNo - 1) * pageSize, pageSize},
-                    pageNo, pageSize, CONFIG_INFO_BETA_WRAPPER_ROW_MAPPER);
-            
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoBetaRepository.findAllConfigInfoBetaForDumpAll(pageNo, pageSize);
     }
     
     @Override
     public Page<ConfigInfoTagWrapper> findAllConfigInfoTagForDumpAll(final int pageNo, final int pageSize) {
-        String sqlCountRows = "SELECT COUNT(*) FROM config_info_tag";
-        String sqlFetchRows = " SELECT t.id,data_id,group_id,tenant_id,tag_id,app_name,content,md5,gmt_modified "
-                + " FROM (  SELECT id FROM config_info_tag  ORDER BY id LIMIT ?,? ) "
-                + "g, config_info_tag t  WHERE g.id = t.id  ";
-        PaginationHelper<ConfigInfoTagWrapper> helper = createPaginationHelper();
-        try {
-            return helper.fetchPageLimit(sqlCountRows, sqlFetchRows, new Object[] {(pageNo - 1) * pageSize, pageSize},
-                    pageNo, pageSize, CONFIG_INFO_TAG_WRAPPER_ROW_MAPPER);
-            
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoTagRepository.findAllConfigInfoTagForDumpAll(pageNo, pageSize);
     }
     
     @Override
@@ -1565,75 +893,7 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     @Override
     public Page<ConfigInfo> findConfigInfoLike4Page(final int pageNo, final int pageSize, final String dataId,
             final String group, final String tenant, final Map<String, Object> configAdvanceInfo) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        final String appName = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("appName");
-        final String content = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("content");
-        final String configTags = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("config_tags");
-        PaginationHelper<ConfigInfo> helper = createPaginationHelper();
-        String sqlCountRows = "select count(*) from config_info";
-        String sqlFetchRows = "select ID,data_id,group_id,tenant_id,app_name,content from config_info";
-        StringBuilder where = new StringBuilder(" where ");
-        List<String> params = new ArrayList<String>();
-        params.add(generateLikeArgument(tenantTmp));
-        if (StringUtils.isNotBlank(configTags)) {
-            sqlCountRows = "select count(*) from config_info  a left join config_tags_relation b on a.id=b.id ";
-            sqlFetchRows = "select a.ID,a.data_id,a.group_id,a.tenant_id,a.app_name,a.content from config_info a left join config_tags_relation b on a.id=b.id ";
-            
-            where.append(" a.tenant_id like ? ");
-            if (!StringUtils.isBlank(dataId)) {
-                where.append(" and a.data_id like ? ");
-                params.add(generateLikeArgument(dataId));
-            }
-            if (!StringUtils.isBlank(group)) {
-                where.append(" and a.group_id like ? ");
-                params.add(generateLikeArgument(group));
-            }
-            if (!StringUtils.isBlank(appName)) {
-                where.append(" and a.app_name = ? ");
-                params.add(appName);
-            }
-            if (!StringUtils.isBlank(content)) {
-                where.append(" and a.content like ? ");
-                params.add(generateLikeArgument(content));
-            }
-            
-            where.append(" and b.tag_name in (");
-            String[] tagArr = configTags.split(",");
-            for (int i = 0; i < tagArr.length; i++) {
-                if (i != 0) {
-                    where.append(", ");
-                }
-                where.append("?");
-                params.add(tagArr[i]);
-            }
-            where.append(") ");
-        } else {
-            where.append(" tenant_id like ? ");
-            if (!StringUtils.isBlank(dataId)) {
-                where.append(" and data_id like ? ");
-                params.add(generateLikeArgument(dataId));
-            }
-            if (!StringUtils.isBlank(group)) {
-                where.append(" and group_id like ? ");
-                params.add(generateLikeArgument(group));
-            }
-            if (!StringUtils.isBlank(appName)) {
-                where.append(" and app_name = ? ");
-                params.add(appName);
-            }
-            if (!StringUtils.isBlank(content)) {
-                where.append(" and content like ? ");
-                params.add(generateLikeArgument(content));
-            }
-        }
-        
-        try {
-            return helper.fetchPage(sqlCountRows + where, sqlFetchRows + where, params.toArray(), pageNo, pageSize,
-                    CONFIG_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfoLike4Page(pageNo, pageSize, dataId, group, tenant, configAdvanceInfo);
     }
     
     @Override
@@ -1713,21 +973,7 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     @Override
     public Page<ConfigInfoAggr> findConfigInfoAggrByPage(String dataId, String group, String tenant, final int pageNo,
             final int pageSize) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        String sqlCountRows = "SELECT COUNT(*) FROM config_info_aggr WHERE data_id = ? and group_id = ? and tenant_id = ?";
-        String sqlFetchRows =
-                "select data_id,group_id,tenant_id,datum_id,app_name,content from config_info_aggr where data_id=? and "
-                        + "group_id=? and tenant_id=? order by datum_id limit ?,?";
-        PaginationHelper<ConfigInfoAggr> helper = createPaginationHelper();
-        try {
-            return helper.fetchPageLimit(sqlCountRows, new Object[] {dataId, group, tenantTmp}, sqlFetchRows,
-                    new Object[] {dataId, group, tenantTmp, (pageNo - 1) * pageSize, pageSize}, pageNo, pageSize,
-                    CONFIG_INFO_AGGR_ROW_MAPPER);
-            
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoAggrRepository.findConfigInfoAggrByPage(dataId, group, tenant, pageNo, pageSize);
     }
     
     @Override
@@ -1833,19 +1079,7 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public List<ConfigInfoChanged> findAllAggrGroup() {
-        String sql = "SELECT DISTINCT data_id, group_id, tenant_id FROM config_info_aggr";
-        
-        try {
-            return jt.query(sql, new Object[] {}, CONFIG_INFO_CHANGED_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        } catch (EmptyResultDataAccessException e) {
-            return null;
-        } catch (Exception e) {
-            LogUtil.FATAL_LOG.error("[db-other-error]" + e.getMessage(), e);
-            throw new RuntimeException(e);
-        }
+        return configInfoAggrRepository.findAllAggrGroup();
     }
     
     @Override
@@ -1866,15 +1100,8 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public List<ConfigInfoWrapper> findChangeConfig(final Timestamp startTime, final Timestamp endTime) {
-        try {
-            List<Map<String, Object>> list = jt.queryForList(
-                    "SELECT data_id, group_id, tenant_id, app_name, content, gmt_modified FROM config_info WHERE gmt_modified >=? AND gmt_modified <= ?",
-                    new Object[] {startTime, endTime});
-            return convertChangeConfig(list);
-        } catch (DataAccessException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        List<Map<String, Object>> list = configInfoRepository.findChangeConfig(startTime, endTime);
+        return convertChangeConfig(list);
     }
     
     @Override
@@ -1926,71 +1153,14 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public List<ConfigInfo> findDeletedConfig(final Timestamp startTime, final Timestamp endTime) {
-        try {
-            List<Map<String, Object>> list = jt.queryForList(
-                    "SELECT DISTINCT data_id, group_id, tenant_id FROM his_config_info WHERE op_type = 'D' AND gmt_modified >=? AND gmt_modified <= ?",
-                    new Object[] {startTime, endTime});
-            return convertDeletedConfig(list);
-        } catch (DataAccessException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        List<Map<String, Object>> list = configInfoRepository.findDeletedConfig(startTime, endTime);
+        return convertDeletedConfig(list);
     }
     
     @Override
     public long addConfigInfoAtomic(final long configId, final String srcIp, final String srcUser,
             final ConfigInfo configInfo, final Timestamp time, Map<String, Object> configAdvanceInfo) {
-        final String appNameTmp =
-                StringUtils.isBlank(configInfo.getAppName()) ? StringUtils.EMPTY : configInfo.getAppName();
-        final String tenantTmp =
-                StringUtils.isBlank(configInfo.getTenant()) ? StringUtils.EMPTY : configInfo.getTenant();
-        
-        final String desc = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("desc");
-        final String use = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("use");
-        final String effect = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("effect");
-        final String type = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("type");
-        final String schema = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("schema");
-        
-        final String md5Tmp = MD5Utils.md5Hex(configInfo.getContent(), Constants.ENCODE);
-        
-        KeyHolder keyHolder = new GeneratedKeyHolder();
-        
-        final String sql =
-                "INSERT INTO config_info(data_id,group_id,tenant_id,app_name,content,md5,src_ip,src_user,gmt_create,"
-                        + "gmt_modified,c_desc,c_use,effect,type,c_schema) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
-        
-        try {
-            jt.update(new PreparedStatementCreator() {
-                @Override
-                public PreparedStatement createPreparedStatement(Connection connection) throws SQLException {
-                    PreparedStatement ps = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
-                    ps.setString(1, configInfo.getDataId());
-                    ps.setString(2, configInfo.getGroup());
-                    ps.setString(3, tenantTmp);
-                    ps.setString(4, appNameTmp);
-                    ps.setString(5, configInfo.getContent());
-                    ps.setString(6, md5Tmp);
-                    ps.setString(7, srcIp);
-                    ps.setString(8, srcUser);
-                    ps.setTimestamp(9, time);
-                    ps.setTimestamp(10, time);
-                    ps.setString(11, desc);
-                    ps.setString(12, use);
-                    ps.setString(13, effect);
-                    ps.setString(14, type);
-                    ps.setString(15, schema);
-                    return ps;
-                }
-            }, keyHolder);
-            Number nu = keyHolder.getKey();
-            if (nu == null) {
-                throw new IllegalArgumentException("insert config_info fail");
-            }
-            return nu.longValue();
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.addConfigInfoAtomic(configId, srcIp, srcUser, configInfo, time, configAdvanceInfo);
     }
     
     @Override
@@ -2005,24 +1175,12 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public void addConfigTagRelationAtomic(long configId, String tagName, String dataId, String group, String tenant) {
-        try {
-            jt.update(
-                    "INSERT INTO config_tags_relation(id,tag_name,tag_type,data_id,group_id,tenant_id) VALUES(?,?,?,?,?,?)",
-                    configId, tagName, null, dataId, group, tenant);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configTagsRelationRepository.addConfigTagRelationAtomic(configId, tagName, dataId, group, tenant);
     }
     
     @Override
     public void removeTagByIdAtomic(long id) {
-        try {
-            jt.update("DELETE FROM config_tags_relation WHERE id=?", id);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configTagsRelationRepository.removeTagByIdAtomic(id);
     }
     
     @Override
@@ -2042,130 +1200,42 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public List<String> selectTagByConfig(String dataId, String group, String tenant) {
-        String sql = "SELECT tag_name FROM config_tags_relation WHERE data_id=? AND group_id=? AND tenant_id = ? ";
-        try {
-            return jt.queryForList(sql, new Object[] {dataId, group, tenant}, String.class);
-        } catch (EmptyResultDataAccessException e) {
-            return null;
-        } catch (IncorrectResultSizeDataAccessException e) {
-            return null;
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configTagsRelationRepository.selectTagByConfig(dataId, group, tenant);
     }
     
     @Override
     public void removeConfigInfoAtomic(final String dataId, final String group, final String tenant, final String srcIp,
             final String srcUser) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        try {
-            jt.update("DELETE FROM config_info WHERE data_id=? AND group_id=? AND tenant_id=?", dataId, group,
-                    tenantTmp);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoRepository.removeConfigInfoAtomic(dataId, group, tenant, srcIp, srcUser);
     }
     
     @Override
     public void removeConfigInfoByIdsAtomic(final String ids) {
-        if (StringUtils.isBlank(ids)) {
-            return;
-        }
-        StringBuilder sql = new StringBuilder(SQL_DELETE_CONFIG_INFO_BY_IDS);
-        sql.append("id in (");
-        List<Long> paramList = new ArrayList<>();
-        String[] tagArr = ids.split(",");
-        for (int i = 0; i < tagArr.length; i++) {
-            if (i != 0) {
-                sql.append(", ");
-            }
-            sql.append("?");
-            paramList.add(Long.parseLong(tagArr[i]));
-        }
-        sql.append(") ");
-        try {
-            jt.update(sql.toString(), paramList.toArray());
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoRepository.removeConfigInfoByIdsAtomic(ids);
     }
     
     @Override
     public void removeConfigInfoTag(final String dataId, final String group, final String tenant, final String tag,
             final String srcIp, final String srcUser) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        String tagTmp = StringUtils.isBlank(tag) ? StringUtils.EMPTY : tag;
-        try {
-            jt.update("DELETE FROM config_info_tag WHERE data_id=? AND group_id=? AND tenant_id=? AND tag_id=?", dataId,
-                    group, tenantTmp, tagTmp);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoTagRepository.removeConfigInfoTag(dataId, group, tenant, tag, srcIp, srcUser);
     }
     
     @Override
     public void updateConfigInfoAtomic(final ConfigInfo configInfo, final String srcIp, final String srcUser,
             final Timestamp time, Map<String, Object> configAdvanceInfo) {
-        String appNameTmp = StringUtils.isBlank(configInfo.getAppName()) ? StringUtils.EMPTY : configInfo.getAppName();
-        String tenantTmp = StringUtils.isBlank(configInfo.getTenant()) ? StringUtils.EMPTY : configInfo.getTenant();
-        final String md5Tmp = MD5Utils.md5Hex(configInfo.getContent(), Constants.ENCODE);
-        String desc = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("desc");
-        String use = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("use");
-        String effect = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("effect");
-        String type = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("type");
-        String schema = configAdvanceInfo == null ? null : (String) configAdvanceInfo.get("schema");
-        
-        try {
-            jt.update("UPDATE config_info SET content=?, md5 = ?, src_ip=?,src_user=?,gmt_modified=?,"
-                            + "app_name=?,c_desc=?,c_use=?,effect=?,type=?,c_schema=? "
-                            + "WHERE data_id=? AND group_id=? AND tenant_id=?", configInfo.getContent(), md5Tmp, srcIp, srcUser,
-                    time, appNameTmp, desc, use, effect, type, schema, configInfo.getDataId(), configInfo.getGroup(),
-                    tenantTmp);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        configInfoRepository.updateConfigInfoAtomic(configInfo, srcIp, srcUser, time, configAdvanceInfo);
     }
     
     @Override
     public List<ConfigInfo> findConfigInfosByIds(final String ids) {
-        if (StringUtils.isBlank(ids)) {
-            return null;
-        }
-        StringBuilder sql = new StringBuilder(SQL_FIND_CONFIG_INFO_BY_IDS);
-        sql.append("id in (");
-        List<Long> paramList = new ArrayList<>();
-        String[] tagArr = ids.split(",");
-        for (int i = 0; i < tagArr.length; i++) {
-            if (i != 0) {
-                sql.append(", ");
-            }
-            sql.append("?");
-            paramList.add(Long.parseLong(tagArr[i]));
-        }
-        sql.append(") ");
-        try {
-            return this.jt.query(sql.toString(), paramList.toArray(), CONFIG_INFO_ROW_MAPPER);
-        } catch (EmptyResultDataAccessException e) { // Indicates that the data does not exist, returns null
-            return null;
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findConfigInfosByIds(ids);
     }
     
     @Override
     public ConfigAdvanceInfo findConfigAdvanceInfo(final String dataId, final String group, final String tenant) {
-        final String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
         try {
             List<String> configTagList = this.selectTagByConfig(dataId, group, tenant);
-            ConfigAdvanceInfo configAdvance = this.jt.queryForObject(
-                    "SELECT gmt_create,gmt_modified,src_user,src_ip,c_desc,c_use,effect,type,c_schema FROM config_info WHERE data_id=? AND group_id=? AND tenant_id=?",
-                    new Object[] {dataId, group, tenantTmp}, CONFIG_ADVANCE_INFO_ROW_MAPPER);
+            ConfigAdvanceInfo configAdvance = configInfoRepository.findConfigAdvanceInfo(dataId, group, tenant);
             if (configTagList != null && !configTagList.isEmpty()) {
                 StringBuilder configTagsTmp = new StringBuilder();
                 for (String configTag : configTagList) {
@@ -2188,14 +1258,9 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public ConfigAllInfo findConfigAllInfo(final String dataId, final String group, final String tenant) {
-        final String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
         try {
             List<String> configTagList = this.selectTagByConfig(dataId, group, tenant);
-            ConfigAllInfo configAdvance = this.jt.queryForObject(
-                    "SELECT ID,data_id,group_id,tenant_id,app_name,content,md5,"
-                            + "gmt_create,gmt_modified,src_user,src_ip,c_desc,c_use,effect,type,c_schema FROM config_info "
-                            + "WHERE data_id=? AND group_id=? AND tenant_id=?", new Object[] {dataId, group, tenantTmp},
-                    CONFIG_ALL_INFO_ROW_MAPPER);
+            ConfigAllInfo configAdvance = configInfoRepository.findConfigAllInfo(dataId, group, tenant);
             if (configTagList != null && !configTagList.isEmpty()) {
                 StringBuilder configTagsTmp = new StringBuilder();
                 for (String configTag : configTagList) {
@@ -2219,41 +1284,13 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     @Override
     public void insertConfigHistoryAtomic(long id, ConfigInfo configInfo, String srcIp, String srcUser,
             final Timestamp time, String ops) {
-        String appNameTmp = StringUtils.isBlank(configInfo.getAppName()) ? StringUtils.EMPTY : configInfo.getAppName();
-        String tenantTmp = StringUtils.isBlank(configInfo.getTenant()) ? StringUtils.EMPTY : configInfo.getTenant();
-        final String md5Tmp = MD5Utils.md5Hex(configInfo.getContent(), Constants.ENCODE);
-        try {
-            jt.update(
-                    "INSERT INTO his_config_info (id,data_id,group_id,tenant_id,app_name,content,md5,src_ip,src_user,gmt_modified,op_type) "
-                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?)", id, configInfo.getDataId(), configInfo.getGroup(),
-                    tenantTmp, appNameTmp, configInfo.getContent(), md5Tmp, srcIp, srcUser, time, ops);
-        } catch (DataAccessException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        hisConfigInfoRepository.insertConfigHistoryAtomic(id, configInfo, srcIp, srcUser, time, ops);
     }
     
     @Override
     public Page<ConfigHistoryInfo> findConfigHistory(String dataId, String group, String tenant, int pageNo,
             int pageSize) {
-        PaginationHelper<ConfigHistoryInfo> helper = createPaginationHelper();
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        String sqlCountRows = "select count(*) from his_config_info where data_id = ? and group_id = ? and tenant_id = ?";
-        String sqlFetchRows =
-                "select nid,data_id,group_id,tenant_id,app_name,src_ip,src_user,op_type,gmt_create,gmt_modified from his_config_info "
-                        + "where data_id = ? and group_id = ? and tenant_id = ? order by nid desc";
-        
-        Page<ConfigHistoryInfo> page = null;
-        try {
-            page = helper
-                    .fetchPage(sqlCountRows, sqlFetchRows, new Object[] {dataId, group, tenantTmp}, pageNo, pageSize,
-                            HISTORY_LIST_ROW_MAPPER);
-        } catch (DataAccessException e) {
-            LogUtil.FATAL_LOG
-                    .error("[list-config-history] error, dataId:{}, group:{}", new Object[] {dataId, group}, e);
-            throw e;
-        }
-        return page;
+        return hisConfigInfoRepository.findConfigHistory(dataId, group, tenant, pageNo, pageSize);
     }
     
     @Override
@@ -2286,95 +1323,38 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public ConfigHistoryInfo detailConfigHistory(Long nid) {
-        String sqlFetchRows = "SELECT nid,data_id,group_id,tenant_id,app_name,content,md5,src_user,src_ip,op_type,gmt_create,gmt_modified FROM his_config_info WHERE nid = ?";
-        try {
-            ConfigHistoryInfo historyInfo = jt
-                    .queryForObject(sqlFetchRows, new Object[] {nid}, HISTORY_DETAIL_ROW_MAPPER);
-            return historyInfo;
-        } catch (DataAccessException e) {
-            LogUtil.FATAL_LOG.error("[detail-config-history] error, nid:{}", new Object[] {nid}, e);
-            throw e;
-        }
+        return hisConfigInfoRepository.detailConfigHistory(nid);
     }
     
     @Override
     public ConfigHistoryInfo detailPreviousConfigHistory(Long id) {
-        String sqlFetchRows = "SELECT nid,data_id,group_id,tenant_id,app_name,content,md5,src_user,src_ip,op_type,gmt_create,gmt_modified FROM his_config_info WHERE nid = (select max(nid) from his_config_info where id = ?) ";
-        try {
-            ConfigHistoryInfo historyInfo = jt
-                    .queryForObject(sqlFetchRows, new Object[] {id}, HISTORY_DETAIL_ROW_MAPPER);
-            return historyInfo;
-        } catch (DataAccessException e) {
-            LogUtil.FATAL_LOG.error("[detail-previous-config-history] error, id:{}", new Object[] {id}, e);
-            throw e;
-        }
+        return hisConfigInfoRepository.detailPreviousConfigHistory(id);
     }
     
     @Override
     public void insertTenantInfoAtomic(String kp, String tenantId, String tenantName, String tenantDesc,
             String createResoure, final long time) {
-        try {
-            jt.update(
-                    "INSERT INTO tenant_info(kp,tenant_id,tenant_name,tenant_desc,create_source,gmt_create,gmt_modified) VALUES(?,?,?,?,?,?,?)",
-                    kp, tenantId, tenantName, tenantDesc, createResoure, time, time);
-        } catch (DataAccessException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        tenantInfoRepository.insertTenantInfoAtomic(kp, tenantId, tenantName, tenantDesc, createResoure, time);
     }
     
     @Override
     public void updateTenantNameAtomic(String kp, String tenantId, String tenantName, String tenantDesc) {
-        try {
-            jt.update(
-                    "UPDATE tenant_info SET tenant_name = ?, tenant_desc = ?, gmt_modified= ? WHERE kp=? AND tenant_id=?",
-                    tenantName, tenantDesc, System.currentTimeMillis(), kp, tenantId);
-        } catch (DataAccessException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        tenantInfoRepository.updateTenantNameAtomic(kp, tenantId, tenantName, tenantDesc);
     }
     
     @Override
     public List<TenantInfo> findTenantByKp(String kp) {
-        String sql = "SELECT tenant_id,tenant_name,tenant_desc FROM tenant_info WHERE kp=?";
-        try {
-            return this.jt.query(sql, new Object[] {kp}, TENANT_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        } catch (EmptyResultDataAccessException e) {
-            return Collections.emptyList();
-        } catch (Exception e) {
-            LogUtil.FATAL_LOG.error("[db-other-error]" + e.getMessage(), e);
-            throw new RuntimeException(e);
-        }
+        return tenantInfoRepository.findTenantByKp(kp);
     }
     
     @Override
     public TenantInfo findTenantByKp(String kp, String tenantId) {
-        String sql = "SELECT tenant_id,tenant_name,tenant_desc FROM tenant_info WHERE kp=? AND tenant_id=?";
-        try {
-            return jt.queryForObject(sql, new Object[] {kp, tenantId}, TENANT_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        } catch (EmptyResultDataAccessException e) {
-            return null;
-        } catch (Exception e) {
-            LogUtil.FATAL_LOG.error("[db-other-error]" + e.getMessage(), e);
-            throw new RuntimeException(e);
-        }
+        return tenantInfoRepository.findTenantByKp(kp, tenantId);
     }
     
     @Override
     public void removeTenantInfoAtomic(final String kp, final String tenantId) {
-        try {
-            jt.update("DELETE FROM tenant_info WHERE kp=? AND tenant_id=?", kp, tenantId);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        tenantInfoRepository.removeTenantInfoAtomic(kp, tenantId);
     }
     
     @Override
@@ -2428,20 +1408,7 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public List<ConfigInfoWrapper> listGroupKeyMd5ByPage(int pageNo, int pageSize) {
-        String sqlCountRows = " SELECT COUNT(*) FROM config_info ";
-        String sqlFetchRows = " SELECT t.id,data_id,group_id,tenant_id,app_name,md5,type,gmt_modified FROM "
-                + "( SELECT id FROM config_info ORDER BY id LIMIT ?,?  ) g, config_info t WHERE g.id = t.id";
-        PaginationHelper<ConfigInfoWrapper> helper = createPaginationHelper();
-        try {
-            Page<ConfigInfoWrapper> page = helper
-                    .fetchPageLimit(sqlCountRows, sqlFetchRows, new Object[] {(pageNo - 1) * pageSize, pageSize},
-                            pageNo, pageSize, CONFIG_INFO_WRAPPER_ROW_MAPPER);
-            
-            return page.getPageItems();
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.listGroupKeyMd5ByPage(pageNo, pageSize);
     }
     
     @Override
@@ -2457,25 +1424,14 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public ConfigInfoWrapper queryConfigInfo(final String dataId, final String group, final String tenant) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        try {
-            return this.jt.queryForObject(
-                    "SELECT ID,data_id,group_id,tenant_id,app_name,content,type,gmt_modified,md5 FROM config_info "
-                            + "WHERE data_id=? AND group_id=? AND tenant_id=?", new Object[] {dataId, group, tenantTmp},
-                    CONFIG_INFO_WRAPPER_ROW_MAPPER);
-        } catch (EmptyResultDataAccessException e) {
-            return null;
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.queryConfigInfo(dataId, group, tenant);
     }
     
     @Override
     public boolean isExistTable(String tableName) {
-        String sql = String.format("select 1 from %s limit 1", tableName);
+        String existTableSql = dialectExistTable.isExistTable(tableName);
         try {
-            jt.queryForObject(sql, Integer.class);
+            jt.queryForObject(existTableSql, Integer.class);
             return true;
         } catch (Throwable e) {
             return false;
@@ -2528,41 +1484,7 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     @Override
     public List<ConfigAllInfo> findAllConfigInfo4Export(final String dataId, final String group, final String tenant,
             final String appName, final List<Long> ids) {
-        String tenantTmp = StringUtils.isBlank(tenant) ? StringUtils.EMPTY : tenant;
-        StringBuilder where = new StringBuilder(" where ");
-        List<Object> paramList = new ArrayList<>();
-        if (!CollectionUtils.isEmpty(ids)) {
-            where.append(" id in (");
-            for (int i = 0; i < ids.size(); i++) {
-                if (i != 0) {
-                    where.append(", ");
-                }
-                where.append("?");
-                paramList.add(ids.get(i));
-            }
-            where.append(") ");
-        } else {
-            where.append(" tenant_id=? ");
-            paramList.add(tenantTmp);
-            if (!StringUtils.isBlank(dataId)) {
-                where.append(" and data_id like ? ");
-                paramList.add(generateLikeArgument(dataId));
-            }
-            if (StringUtils.isNotBlank(group)) {
-                where.append(" and group_id=? ");
-                paramList.add(group);
-            }
-            if (StringUtils.isNotBlank(appName)) {
-                where.append(" and app_name=? ");
-                paramList.add(appName);
-            }
-        }
-        try {
-            return this.jt.query(SQL_FIND_ALL_CONFIG_INFO + where, paramList.toArray(), CONFIG_ALL_INFO_ROW_MAPPER);
-        } catch (CannotGetJdbcConnectionException e) {
-            LogUtil.FATAL_LOG.error("[db-error] " + e.toString(), e);
-            throw e;
-        }
+        return configInfoRepository.findAllConfigInfo4Export(dataId, group, tenant, appName, ids);
     }
     
     @Override
@@ -2649,13 +1571,7 @@ public class ExternalStoragePersistServiceImpl implements PersistService {
     
     @Override
     public int tenantInfoCountByTenantId(String tenantId) {
-        Assert.hasText(tenantId, "tenantId can not be null");
-        Integer result = this.jt
-                .queryForObject(SQL_TENANT_INFO_COUNT_BY_TENANT_ID, new String[] {tenantId}, Integer.class);
-        if (result == null) {
-            return 0;
-        }
-        return result.intValue();
+        return tenantInfoRepository.tenantInfoCountByTenantId(tenantId);
     }
     
 }

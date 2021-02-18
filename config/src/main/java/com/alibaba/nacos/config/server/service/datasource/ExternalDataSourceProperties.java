@@ -33,9 +33,7 @@ import static com.alibaba.nacos.common.utils.CollectionUtils.getOrDefault;
  */
 public class ExternalDataSourceProperties {
     
-    private static final String JDBC_DRIVER_NAME = "com.mysql.cj.jdbc.Driver";
-    
-    private static final String TEST_QUERY = "SELECT 1";
+    private List<String> testQuery;
     
     private Integer num;
     
@@ -44,6 +42,8 @@ public class ExternalDataSourceProperties {
     private List<String> user = new ArrayList<>();
     
     private List<String> password = new ArrayList<>();
+    
+    private List<String> driverClassName = new ArrayList<>();
     
     public void setNum(Integer num) {
         this.num = num;
@@ -61,6 +61,22 @@ public class ExternalDataSourceProperties {
         this.password = password;
     }
     
+    public List<String> getDriverClassName() {
+        return driverClassName;
+    }
+    
+    public void setDriverClassName(List<String> driverClassName) {
+        this.driverClassName = driverClassName;
+    }
+    
+    public List<String> getTestQuery() {
+        return testQuery;
+    }
+    
+    public void setTestQuery(List<String> testQuery) {
+        this.testQuery = testQuery;
+    }
+    
     /**
      * Build serveral HikariDataSource.
      *
@@ -74,16 +90,18 @@ public class ExternalDataSourceProperties {
         Preconditions.checkArgument(Objects.nonNull(num), "db.num is null");
         Preconditions.checkArgument(CollectionUtils.isNotEmpty(user), "db.user or db.user.[index] is null");
         Preconditions.checkArgument(CollectionUtils.isNotEmpty(password), "db.password or db.password.[index] is null");
+        Preconditions.checkArgument(CollectionUtils.isNotEmpty(driverClassName), "db.driver-class-name or db.driver-class-name.[index] is null");
+        Preconditions.checkArgument(CollectionUtils.isNotEmpty(testQuery), "db.test-query or db.test-query.[index] is null");
         for (int index = 0; index < num; index++) {
             int currentSize = index + 1;
             Preconditions.checkArgument(url.size() >= currentSize, "db.url.%s is null", index);
             DataSourcePoolProperties poolProperties = DataSourcePoolProperties.build(environment);
-            poolProperties.setDriverClassName(JDBC_DRIVER_NAME);
+            poolProperties.setDriverClassName(getOrDefault(driverClassName, index, driverClassName.get(0)).trim());
             poolProperties.setJdbcUrl(url.get(index).trim());
             poolProperties.setUsername(getOrDefault(user, index, user.get(0)).trim());
             poolProperties.setPassword(getOrDefault(password, index, password.get(0)).trim());
             HikariDataSource ds = poolProperties.getDataSource();
-            ds.setConnectionTestQuery(TEST_QUERY);
+            ds.setConnectionTestQuery(getOrDefault(testQuery, index, testQuery.get(0)).trim());
             dataSources.add(ds);
             callback.accept(ds);
         }

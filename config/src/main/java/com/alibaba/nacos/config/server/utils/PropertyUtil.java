@@ -16,6 +16,7 @@
 
 package com.alibaba.nacos.config.server.utils;
 
+import com.alibaba.nacos.config.server.service.datasource.ExternalDataSourceType;
 import com.alibaba.nacos.sys.env.EnvUtil;
 import org.slf4j.Logger;
 import org.springframework.context.ApplicationContextInitializer;
@@ -274,8 +275,7 @@ public class PropertyUtil implements ApplicationContextInitializer<ConfigurableA
             setInitialExpansionPercent(getInt("initialExpansionPercent", initialExpansionPercent));
             
             // External data sources are used by default in cluster mode
-            setUseExternalDB("mysql".equalsIgnoreCase(getString("spring.datasource.platform", "")));
-            
+            setUseExternalDB(ExternalDataSourceType.resolve(getString("spring.datasource.platform", "")) != null);
             // must initialize after setUseExternalDB
             // This value is true in stand-alone mode and false in cluster mode
             // If this value is set to true in cluster mode, nacos's distributed storage engine is turned on
